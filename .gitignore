@@ -1,1 +1,3 @@
-dist/\ntest/
+node_modules/
+dist/
+test/
