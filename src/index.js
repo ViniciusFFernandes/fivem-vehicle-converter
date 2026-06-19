@@ -22,15 +22,17 @@ async function run() {
     fs.mkdirSync(outputRoot, { recursive: true });
 
     console.log(`\n🚗  FiveM Vehicle Converter`);
-    console.log(`   Pasta   : ${appDir}\n`);
+    console.log(`   Pasta   : ${appDir}`);
+    console.log(`   Coloque em VeiculosOriginais/ as pastas com arquivos exportados pelo OpenIV.\n`);
 
     const vehicleFolders = fs.readdirSync(inputRoot, { withFileTypes: true })
         .filter(e => e.isDirectory())
         .map(e => path.join(inputRoot, e.name));
 
     if (vehicleFolders.length === 0) {
-        console.log(`   Nenhum veículo encontrado em VeiculosOriginais.`);
-        console.log(`   Coloque as pastas dos veículos lá e rode novamente.\n`);
+        console.log(`   Nenhum veículo encontrado em VeiculosOriginais/.`);
+        console.log(`   Exporte os arquivos do veículo pelo OpenIV e coloque`);
+        console.log(`   cada veículo em uma subpasta (ex: VeiculosOriginais/ferrari/).\n`);
         await pause();
         return;
     }
@@ -70,10 +72,8 @@ async function run() {
 `);
 
     if (errors > 0) {
-        console.log(`  ⚠️  Veículos com ERRO provavelmente têm RPF criptografado.`);
-        console.log(`     Abra o OpenIV, exporte os arquivos manualmente e recoloque`);
-        console.log(`     os arquivos soltos na pasta do veículo. O conversor aceita`);
-        console.log(`     arquivos .yft/.ytd/.meta soltos sem precisar do .rpf.\n`);
+        console.log(`  ⚠️  Verifique se as pastas com ERRO contêm os arquivos`);
+        console.log(`     exportados corretamente pelo OpenIV (.yft, .ytd, .meta).\n`);
     }
 
     await pause();
