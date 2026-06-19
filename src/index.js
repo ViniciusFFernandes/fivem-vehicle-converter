@@ -11,8 +11,10 @@ function pause() {
 }
 
 async function run() {
-    // Diretório onde o .exe está
-    const appDir     = path.dirname(process.execPath);
+    // Quando rodando como .exe (SEA), usa o diretório do executável.
+    // Quando rodando com "node" em desenvolvimento, usa o diretório atual.
+    const exeName = path.basename(process.execPath).toLowerCase().replace(/\.exe$/, '');
+    const appDir  = exeName === 'node' ? process.cwd() : path.dirname(process.execPath);
     const inputRoot  = path.join(appDir, 'VeiculosOriginais');
     const outputRoot = path.join(appDir, 'VeiculosConvertidos');
 

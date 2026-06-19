@@ -2,14 +2,19 @@ import { inflateSync } from 'zlib';
 
 const RPF7_MAGIC   = 0x52504637;
 const DIR_MARKER   = 0x7FFFFF00;
-// 0x4E45504F = "OPEN" — marcador de não-criptografado usado nos DLCs oficiais
 const ENCRYPT_NONE = 0x00000000;
-const ENCRYPT_OPEN = 0x4E45504F;
+const ENCRYPT_OPEN = 0x4E45504F; // "OPEN" — DLCs oficiais sem criptografia no diretório
 
 export class RpfReader {
-    constructor(buffer) {
-        this.buf   = buffer;
-        this.files = {};
+    /**
+     * @param {Buffer}  buffer
+     * @param {boolean} [listOnly=false] — se true, apenas lista caminhos sem extrair conteúdo
+     */
+    constructor(buffer, listOnly = false) {
+        this.buf      = buffer;
+        this.files    = {};   // path → Buffer  (vazio quando listOnly=true)
+        this.paths    = [];   // path[]         (sempre preenchido)
+        this.listOnly = listOnly;
         this._parse();
     }
 
@@ -18,7 +23,7 @@ export class RpfReader {
 
         if (buf.length < 16) throw new Error('Arquivo muito pequeno para ser RPF');
 
-        const magic      = buf.readUInt32LE(0);
+        const magic = buf.readUInt32LE(0);
         if (magic !== RPF7_MAGIC) throw new Error('Não é RPF7 (magic inválido)');
 
         const entryCount = buf.readUInt32LE(4);
@@ -35,19 +40,17 @@ export class RpfReader {
         const entryTableStart = 16;
         const namesStart      = entryTableStart + entryCount * 16;
         const dataStart       = namesStart + namesLen;
+        const namesRaw        = buf.slice(namesStart, namesStart + namesLen);
 
-        const namesRaw = buf.slice(namesStart, namesStart + namesLen);
-
-        // Lê entradas
-        // Formato real do RPF7 (verificado com arquivo real):
-        //   bytes 0-3:  nameOffset (bits 0-15 = índice na tabela de nomes)
-        //   bytes 4-7:  0x7FFFFF00 se diretório, ou offset do arquivo se arquivo
-        //   bytes 8-11: entriesIndex (dir) | fileSize comprimido (file)
-        //   bytes 12-15:entriesCount (dir) | uncompressedSize (file, 0 = não comprimido)
+        // Formato do entry RPF7 (16 bytes por entry):
+        //   bytes  0-3:  nameOffset (bits 0-15 = índice na tabela de nomes)
+        //   bytes  4-7:  0x7FFFFF00 se diretório, ou offset do arquivo se arquivo
+        //   bytes  8-11: entriesIndex (dir) | fileSize comprimido (file)
+        //   bytes 12-15: entriesCount (dir) | uncompressedSize (file, 0 = não comprimido)
         const entries = [];
         for (let i = 0; i < entryCount; i++) {
             const base    = entryTableStart + i * 16;
-            const nameOff = buf.readUInt32LE(base)      & 0xFFFF;
+            const nameOff = buf.readUInt32LE(base)     & 0xFFFF;
             const d1      = buf.readUInt32LE(base + 4);
             const d2      = buf.readUInt32LE(base + 8);
             const d3      = buf.readUInt32LE(base + 12);
@@ -59,7 +62,6 @@ export class RpfReader {
             }
         }
 
-        // Percorre a partir da raiz (entrada 0)
         this._walkDir(entries, namesRaw, buf, dataStart, 0, '');
     }
 
@@ -78,25 +80,27 @@ export class RpfReader {
             if (!name) return;
             const fullPath = prefix ? `${prefix}/${name}` : name;
 
-            let data;
-            if (e.uncompressedSize === 0) {
-                // Não comprimido — lê diretamente
-                data = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
-            } else {
-                // Comprimido com deflate
-                const raw = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
-                try {
-                    data = inflateSync(raw);
-                } catch {
-                    try { data = inflateSync(raw, { finishFlush: 2 }); } catch { data = raw; }
-                }
-            }
+            this.paths.push(fullPath);
 
-            this.files[fullPath] = data;
+            if (!this.listOnly) {
+                // Extrai conteúdo (só funciona bem em arquivos não-criptografados)
+                let data;
+                if (e.uncompressedSize === 0) {
+                    data = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
+                } else {
+                    const raw = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
+                    try {
+                        data = inflateSync(raw);
+                    } catch {
+                        try { data = inflateSync(raw, { finishFlush: 2 }); } catch { data = raw; }
+                    }
+                }
+                this.files[fullPath] = data;
+            }
             return;
         }
 
-        // É diretório — percorre filhos
+        // Diretório — percorre filhos
         const dirName  = this._name(namesRaw, e.nameOff);
         const childPfx = prefix ? (dirName ? `${prefix}/${dirName}` : prefix) : dirName;
 
@@ -108,6 +112,6 @@ export class RpfReader {
         }
     }
 
-    listFiles() { return Object.keys(this.files); }
+    listFiles() { return this.paths; }
     getFile(p)  { return this.files[p]; }
 }
