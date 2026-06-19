@@ -1,0 +1,5 @@
+{
+  "main": "D:\\sistemas\\fivem-vehicle-converter\\dist\\bundle.cjs",
+  "output": "D:\\sistemas\\fivem-vehicle-converter\\dist\\sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}

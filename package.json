@@ -1,0 +1,22 @@
+{
+  "name": "fivem-vehicle-converter",
+  "version": "1.0.0",
+  "description": "Converte veículos GTA V (.rpf) para resources do FiveM",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "convert": "node src/index.js",
+    "bundle": "esbuild src/index.js --bundle --platform=node --outfile=dist/bundle.cjs",
+    "build": "node build.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.20.0",
+    "esbuild": "^0.28.1",
+    "postject": "^1.0.0-alpha.6"
+  }
+}
