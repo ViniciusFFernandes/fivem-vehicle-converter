@@ -1,34 +1,40 @@
-import fs   from 'fs';
-import path  from 'path';
+import fs       from 'fs';
+import path     from 'path';
+import readline from 'readline';
 import { convertVehicle } from './converter.js';
 
-// Diretório onde o .exe está rodando
-const appDir = path.dirname(process.execPath || process.argv[1]);
-
-const inputRoot  = path.join(appDir, 'VeiculosOriginais');
-const outputRoot = path.join(appDir, 'VeiculosConvertidos');
-
-// Garante que as pastas existem
-fs.mkdirSync(inputRoot,  { recursive: true });
-fs.mkdirSync(outputRoot, { recursive: true });
-
-const vehicleFolders = fs.readdirSync(inputRoot, { withFileTypes: true })
-    .filter(e => e.isDirectory())
-    .map(e => path.join(inputRoot, e.name));
-
-if (vehicleFolders.length === 0) {
-    console.log(`\n🚗  FiveM Vehicle Converter`);
-    console.log(`\n   Nenhum veículo encontrado em VeiculosOriginais.`);
-    console.log(`   Coloque as pastas dos veículos lá e rode novamente.\n`);
-    process.exit(0);
+function pause() {
+    return new Promise(resolve => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        rl.question('\nPressione ENTER para fechar...', () => { rl.close(); resolve(); });
+    });
 }
 
-console.log(`\n🚗  FiveM Vehicle Converter`);
-console.log(`   Entrada : ${inputRoot}`);
-console.log(`   Saída   : ${outputRoot}`);
-console.log(`   Veículos: ${vehicleFolders.length}\n`);
-
 async function run() {
+    // Diretório onde o .exe está
+    const appDir     = path.dirname(process.execPath);
+    const inputRoot  = path.join(appDir, 'VeiculosOriginais');
+    const outputRoot = path.join(appDir, 'VeiculosConvertidos');
+
+    fs.mkdirSync(inputRoot,  { recursive: true });
+    fs.mkdirSync(outputRoot, { recursive: true });
+
+    console.log(`\n🚗  FiveM Vehicle Converter`);
+    console.log(`   Pasta   : ${appDir}\n`);
+
+    const vehicleFolders = fs.readdirSync(inputRoot, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => path.join(inputRoot, e.name));
+
+    if (vehicleFolders.length === 0) {
+        console.log(`   Nenhum veículo encontrado em VeiculosOriginais.`);
+        console.log(`   Coloque as pastas dos veículos lá e rode novamente.\n`);
+        await pause();
+        return;
+    }
+
+    console.log(`   Veículos encontrados: ${vehicleFolders.length}\n`);
+
     let ok = 0, skipped = 0, errors = 0;
 
     for (const folder of vehicleFolders) {
@@ -39,6 +45,9 @@ async function run() {
 
         if (result.status === 'ok') {
             console.log(`✅  ${result.message}`);
+            ok++;
+        } else if (result.status === 'partial') {
+            console.log(`⚠️   PARCIAL — ${result.message}`);
             ok++;
         } else if (result.status === 'skip') {
             console.log(`⏭️   IGNORADO — ${result.message}`);
@@ -61,9 +70,16 @@ async function run() {
     if (errors > 0) {
         console.log(`  ⚠️  Veículos com ERRO provavelmente têm RPF criptografado.`);
         console.log(`     Abra o OpenIV, exporte os arquivos manualmente e recoloque`);
-        console.log(`     os arquivos soltos na pasta do veículo. O conversor aceitará`);
+        console.log(`     os arquivos soltos na pasta do veículo. O conversor aceita`);
         console.log(`     arquivos .yft/.ytd/.meta soltos sem precisar do .rpf.\n`);
     }
+
+    await pause();
 }
 
-run().catch(err => { console.error('Erro fatal:', err.message); process.exit(1); });
+run().catch(async err => {
+    console.error('\n❌ Erro fatal:', err.message);
+    console.error(err.stack);
+    await pause();
+    process.exit(1);
+});

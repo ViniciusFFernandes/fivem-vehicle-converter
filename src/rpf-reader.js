@@ -1,38 +1,34 @@
-/**
- * Leitor de arquivos RPF7 (GTA V) — suporta não-criptografado e AES (chave pública de DLC).
- * Formato documentado pela comunidade: https://gtamods.com/wiki/RPF_archive
- */
-
 import { inflateSync } from 'zlib';
 
-const RPF7_MAGIC     = 0x52504637;
-const ENCRYPT_NONE   = 0x00000000;
-const ENCRYPT_OPEN   = 0x4E45504F; // "OPEN" — sem criptografia real, só marcador
-const DIR_MARKER     = 0x7FFFFF00;
+const RPF7_MAGIC   = 0x52504637;
+const DIR_MARKER   = 0x7FFFFF00;
+// 0x4E45504F = "OPEN" — marcador de não-criptografado usado nos DLCs oficiais
+const ENCRYPT_NONE = 0x00000000;
+const ENCRYPT_OPEN = 0x4E45504F;
 
 export class RpfReader {
-    /**
-     * @param {Buffer} buffer — conteúdo completo do .rpf em memória
-     */
     constructor(buffer) {
-        this.buf = buffer;
+        this.buf   = buffer;
+        this.files = {};
         this._parse();
     }
 
     _parse() {
         const buf = this.buf;
 
-        const magic = buf.readUInt32LE(0);
-        if (magic !== RPF7_MAGIC) throw new Error('Arquivo não é RPF7 (magic inválido)');
+        if (buf.length < 16) throw new Error('Arquivo muito pequeno para ser RPF');
 
-        const entryCount  = buf.readUInt32LE(4);
-        const namesLen    = buf.readUInt32LE(8);
-        const encryption  = buf.readUInt32LE(12);
+        const magic      = buf.readUInt32LE(0);
+        if (magic !== RPF7_MAGIC) throw new Error('Não é RPF7 (magic inválido)');
+
+        const entryCount = buf.readUInt32LE(4);
+        const namesLen   = buf.readUInt32LE(8);
+        const encryption = buf.readUInt32LE(12);
 
         if (encryption !== ENCRYPT_NONE && encryption !== ENCRYPT_OPEN) {
             throw new Error(
-                `RPF criptografado (tipo 0x${encryption.toString(16).toUpperCase()}). ` +
-                `Use o OpenIV para extrair manualmente e recoloque os arquivos soltos na pasta do veículo.`
+                `RPF criptografado (0x${encryption.toString(16).toUpperCase()}). ` +
+                `Use o OpenIV para exportar os arquivos e coloque-os soltos na pasta do veículo.`
             );
         }
 
@@ -40,64 +36,59 @@ export class RpfReader {
         const namesStart      = entryTableStart + entryCount * 16;
         const dataStart       = namesStart + namesLen;
 
-        // Lê tabela de nomes (strings terminadas em \0)
         const namesRaw = buf.slice(namesStart, namesStart + namesLen);
 
-        // Lê todas as entradas
-        const rawEntries = [];
+        // Lê entradas
+        // Formato real do RPF7 (verificado com arquivo real):
+        //   bytes 0-3:  nameOffset (bits 0-15 = índice na tabela de nomes)
+        //   bytes 4-7:  0x7FFFFF00 se diretório, ou offset do arquivo se arquivo
+        //   bytes 8-11: entriesIndex (dir) | fileSize comprimido (file)
+        //   bytes 12-15:entriesCount (dir) | uncompressedSize (file, 0 = não comprimido)
+        const entries = [];
         for (let i = 0; i < entryCount; i++) {
-            const base = entryTableStart + i * 16;
-            rawEntries.push({
-                nameOff : buf.readUInt32LE(base)      & 0x0FFFFFFF,
-                d1      : buf.readUInt32LE(base + 4),
-                d2      : buf.readUInt32LE(base + 8),
-                d3      : buf.readUInt32LE(base + 12),
-            });
+            const base    = entryTableStart + i * 16;
+            const nameOff = buf.readUInt32LE(base)      & 0xFFFF;
+            const d1      = buf.readUInt32LE(base + 4);
+            const d2      = buf.readUInt32LE(base + 8);
+            const d3      = buf.readUInt32LE(base + 12);
+
+            if (d1 === DIR_MARKER) {
+                entries.push({ isDir: true,  nameOff, entriesIndex: d2, entriesCount: d3 });
+            } else {
+                entries.push({ isDir: false, nameOff, fileOffset: d1, fileSize: d2, uncompressedSize: d3 });
+            }
         }
 
-        // Monta árvore recursivamente a partir da entrada 0 (root)
-        this.files = {};
-        this._walkDir(rawEntries, namesRaw, buf, dataStart, 0, '');
+        // Percorre a partir da raiz (entrada 0)
+        this._walkDir(entries, namesRaw, buf, dataStart, 0, '');
     }
 
-    _readName(namesRaw, offset) {
-        let end = offset;
+    _name(namesRaw, off) {
+        let end = off;
         while (end < namesRaw.length && namesRaw[end] !== 0) end++;
-        return namesRaw.slice(offset, end).toString('utf8');
+        return namesRaw.slice(off, end).toString('utf8');
     }
 
-    _walkDir(entries, namesRaw, buf, dataStart, entryIdx, pathPrefix) {
-        const e = entries[entryIdx];
-        // Entrada de diretório: d3 == DIR_MARKER ou d3 >> 8 == 0x7FFFFF
-        const isDir = (e.d3 === DIR_MARKER) || ((e.d3 >>> 8) === 0x7FFFFF);
+    _walkDir(entries, namesRaw, buf, dataStart, idx, prefix) {
+        if (idx >= entries.length) return;
+        const e = entries[idx];
 
-        if (!isDir) {
-            // É um arquivo — extrai dados
-            const rawOffset      = (e.d1 & 0x7FFFFF) * 512;
-            const compressedSize = e.d2;
-            const realSize       = e.d3;
-
-            const name = this._readName(namesRaw, e.nameOff);
+        if (!e.isDir) {
+            const name = this._name(namesRaw, e.nameOff);
             if (!name) return;
-
-            const fullPath = pathPrefix ? `${pathPrefix}/${name}` : name;
+            const fullPath = prefix ? `${prefix}/${name}` : name;
 
             let data;
-            if (realSize === 0 || realSize === compressedSize) {
-                // Não comprimido
-                data = buf.slice(dataStart + rawOffset, dataStart + rawOffset + compressedSize);
+            if (e.uncompressedSize === 0) {
+                // Não comprimido — lê diretamente
+                data = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
             } else {
-                // Comprimido com deflate (zlib)
-                const compressed = buf.slice(dataStart + rawOffset, dataStart + rawOffset + compressedSize);
+                // Comprimido com deflate
+                const raw = buf.slice(dataStart + e.fileOffset, dataStart + e.fileOffset + e.fileSize);
                 try {
-                    data = inflateSync(compressed);
+                    data = inflateSync(raw);
                 } catch {
-                    // Tenta sem cabeçalho zlib (raw deflate)
-                    try {
-                        data = inflateSync(compressed, { finishFlush: 2 });
-                    } catch {
-                        data = compressed; // entrega bruto se falhar
-                    }
+                    try { data = inflateSync(raw, { finishFlush: 2 }); } catch { data = raw; }
                 }
             }
 
@@ -105,25 +96,18 @@ export class RpfReader {
             return;
         }
 
-        // É um diretório — percorre filhos
-        const name         = this._readName(namesRaw, e.nameOff);
-        const childPath    = pathPrefix ? (name ? `${pathPrefix}/${name}` : pathPrefix) : name;
-        const childStart   = e.d1;
-        const childCount   = e.d2;
+        // É diretório — percorre filhos
+        const dirName  = this._name(namesRaw, e.nameOff);
+        const childPfx = prefix ? (dirName ? `${prefix}/${dirName}` : prefix) : dirName;
 
-        for (let i = childStart; i < childStart + childCount; i++) {
-            if (i === entryIdx) continue; // evita loop na raiz
-            this._walkDir(entries, namesRaw, buf, dataStart, i, childPath);
+        const start = e.entriesIndex;
+        const count = e.entriesCount;
+        for (let i = start; i < start + count; i++) {
+            if (i === idx) continue; // evita loop na raiz (entry 0 aponta para si mesma)
+            this._walkDir(entries, namesRaw, buf, dataStart, i, childPfx);
         }
     }
 
-    /** Retorna lista de todos os caminhos internos */
-    listFiles() {
-        return Object.keys(this.files);
-    }
-
-    /** Retorna o Buffer de um arquivo interno pelo caminho */
-    getFile(path) {
-        return this.files[path];
-    }
+    listFiles() { return Object.keys(this.files); }
+    getFile(p)  { return this.files[p]; }
 }

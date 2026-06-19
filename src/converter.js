@@ -39,17 +39,26 @@ export async function convertVehicle(vehicleFolder, outputRoot) {
 
     for (const rpfPath of rpfFiles) {
         try {
-            const buf    = fs.readFileSync(rpfPath);
-            const reader = new RpfReader(buf);
-            for (const [filePath, data] of Object.entries(reader.files)) {
-                extracted[filePath] = data;
-            }
+            const buf = fs.readFileSync(rpfPath);
+            extractRpfRecursive(buf, extracted);
         } catch (err) {
             return { name: vehicleName, status: 'error', message: err.message };
         }
     }
 
     return buildResource(vehicleName, extracted, outputRoot);
+}
+
+// Extrai um RPF e entra recursivamente em RPFs aninhados (ex: vehicles.rpf dentro de dlc.rpf)
+function extractRpfRecursive(buf, out) {
+    const reader = new RpfReader(buf);
+    for (const [filePath, data] of Object.entries(reader.files)) {
+        if (path.extname(filePath).toLowerCase() === '.rpf') {
+            try { extractRpfRecursive(data, out); } catch {}
+        } else {
+            out[filePath] = data;
+        }
+    }
 }
 
 function findRpf(dir) {
@@ -133,6 +142,34 @@ function buildResource(vehicleName, files, outputRoot) {
 
     const manifest = generateManifest(vehicleName, dataFiles);
     fs.writeFileSync(path.join(resourceDir, 'fxmanifest.lua'), manifest, 'utf8');
+
+    if (streamCount === 0 && dataFiles.length > 0) {
+        // Metas extraídos mas modelos criptografados — resource parcial
+        fs.writeFileSync(
+            path.join(resourceDir, 'LEIA-ME.txt'),
+            [
+                `Resource parcialmente convertido — metas OK, modelos faltando`,
+                ``,
+                `Os arquivos de modelo (.yft, .ytd) estão dentro de um RPF criptografado`,
+                `que só o OpenIV consegue abrir. Siga os passos:`,
+                ``,
+                `1. Abra o OpenIV`,
+                `2. Localize o arquivo dlc.rpf deste veículo`,
+                `3. Dentro dele, abra: x64 > levels > gta5 > vehicles > vehicles.rpf`,
+                `4. Exporte todos os arquivos .yft e .ytd`,
+                `5. Cole-os na pasta stream/ deste resource`,
+                `6. Delete este LEIA-ME.txt`,
+                ``,
+                `Metas já extraídos e prontos: ${dataFiles.join(', ')}`,
+            ].join('\n'),
+            'utf8'
+        );
+        return {
+            name    : vehicleName,
+            status  : 'partial',
+            message : `${dataFiles.length} meta(s) extraído(s), modelos criptografados — veja LEIA-ME.txt`,
+        };
+    }
 
     return {
         name    : vehicleName,
